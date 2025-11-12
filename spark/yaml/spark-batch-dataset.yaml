@@ -4,6 +4,10 @@ metadata:
   name: spark-batch-dataset          # 💡 job 이름 변경
   namespace: default
 spec:
+  sparkConf:
+    "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem"
+    "spark.hadoop.fs.s3a.endpoint": "s3.ap-northeast-2.amazonaws.com"
+
   type: Python
   mode: cluster
   image: dwnusa/spark:v3.5.4-amd64
@@ -25,11 +29,11 @@ spec:
     - "--pg-user"
     - "dwnusa"
     - "--pg-table"
-    - "smd_raw_data_lake"
+    - "backfill_train_251112"
 
     # S3 저장 관련
     - "--s3-bucket"
-    - "s3a://mybucket/smd-dataset"
+    - "s3a://kas-on-m3k/smd-dataset"
     - "--format"
     - "parquet"
 
@@ -39,7 +43,7 @@ spec:
 
   driver:
     cores: 1
-    memory: 512m
+    memory: 2g
     serviceAccount: spark-operator-spark
     volumeMounts:
       - name: data
@@ -47,8 +51,8 @@ spec:
 
   executor:
     cores: 1
-    instances: 4
-    memory: 512m
+    instances: 2            # executor 수 증가
+    memory: 2g
     volumeMounts:
       - name: data
         mountPath: /opt/spark-data
