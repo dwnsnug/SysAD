@@ -82,7 +82,7 @@ def create_topic(dest_servers, topic_name, num_partitions=3, replication_factor=
         admin_client.create_topics(new_topics=[topic], validate_only=False)
         logger.info(f"✅ 토픽 생성 완료: {topic_name} (partitions={num_partitions}, replicas={replication_factor})")
     except TopicAlreadyExistsError:
-        logger.warnming(f"⚠️ 토픽 '{topic_name}'은 이미 존재합니다.")
+        logger.warning(f"⚠️ 토픽 '{topic_name}'은 이미 존재합니다.")
     finally:
         admin_client.close()
 
@@ -102,7 +102,7 @@ def iter_all_csv_rows(base_dir):
     csv_files = sorted(glob.glob(data_pattern))
 
     if not csv_files:
-        logger.warnming(f"⚠️ CSV 파일을 찾지 못했습니다: {data_pattern}")
+        logger.warning(f"⚠️ CSV 파일을 찾지 못했습니다: {data_pattern}")
         return
 
     for csv_path in csv_files:
@@ -149,8 +149,8 @@ def main_kafka(args):
     create_topic(
         dest_servers, 
         topic_name, 
-        num_partitions=14, 
-        replication_factor=1
+        num_partitions=args.partitions, 
+        replication_factor=args.replications
     )
 
     # ✅ Kafka Producer 설정 (지연 최소화, 병렬 최적화)
@@ -189,7 +189,7 @@ def main_kafka(args):
             )
             future.add_callback(on_send_success).add_errback(on_send_error)
             total_sent += 1
-            if total_sent % 500 == 0:
+            if total_sent % args.batch_size == 0:
                 producer.flush()
 
         producer.flush()
@@ -289,6 +289,9 @@ if __name__ == "__main__":
     parser.add_argument('--topic', default='backfill-train-topic', type=str, help='메시지를 보낼 토픽')
     parser.add_argument('--dest-servers', default='kafka.kafka.svc.cluster.local:9092',
                         type=str, help='Kafka 또는 Postgres 서버')
+    parser.add_argument('--partitions', default=14, type=int, help='토픽 파티션 수 (기본: 14)')
+    parser.add_argument('--replications', default=1, type=int, help='토픽 복제본 수 (기본: 1)')
+    parser.add_argument('--batch-size', default=1000, type=int, help='메시지 전송 배치 사이즈')
     
     # ✅ PostgreSQL 인자 추가
     parser.add_argument("--pg-host", default=os.getenv("PG_HOST", "localhost"), help='PostgreSQL 호스트명')
