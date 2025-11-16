@@ -90,26 +90,57 @@ helm install kafka bitnami/kafka \
 ```bash
 # kubectl create namespace kafka
 kubectl apply -f kafka-ui.yaml
-minikube -p <MINIKUBE_PROFILE_NAME> service kafka-ui -n kafka
+minikube -p <MINIKUBE_PROFILE_NAME> service kafka-ui -n kafka --url
 # 192.168.xx.xx:30095
 ```
 
 ## 3. Producer and Consumer for Kafka Test
 ### 3.0. Customize App Images
-**Producer**
+**Producer-realtime**
 ```bash
-# docker build -f Dockerfile.producer -t dwnusa/smd-producer:v0.0.1-amd64 .
+# docker build -f Dockerfile.producer -t dwnusa/smd-producer-realtime:v0.1.2-amd64 .
 docker build \
   --no-cache \
   -f Dockerfile.producer \
-  -t dwnusa/smd-producer:v0.0.2-amd64 .
+  -t dwnusa/smd-producer-realtime:v0.1.2-amd64 .
 
-docker push dwnusa/smd-producer:v0.0.2-amd64
+docker push dwnusa/smd-producer-realtime:v0.1.2-amd64
 
-kubectl run smd-producer \
+# version updated v0.1.2 (2025-11-15)
+kubectl run smd-producer-<MACHINE_ID> \
   --restart='Never' \
   --image-pull-policy='Always' \
-  --image dwnusa/smd-producer:v0.0.2-amd64
+  --image dwnusa/smd-producer-realtime:v0.1.2-amd64 \
+  --  --topic <TOPIC_NAME> \
+      --machine <MACHINE_ID>
+
+# depricated version v0.0.2
+# kubectl run smd-producer \
+#   --restart='Never' \
+#   --image-pull-policy='Always' \
+#   --image dwnusa/smd-producer:v0.0.2-amd64
+```
+**Producer-backfill**
+```bash
+# Kafka mode
+kubectl run smd-producer-backfill-kafka \
+  --restart='Never' \
+  --image-pull-policy='Always' \
+  --image dwnusa/smd-producer-backfill:v0.1.2-amd64 \
+  --  --dest kafka \
+      --bootstrap-servers kafka.kafka.svc.cluster.local:9092 \
+      --topic <TOPIC_NAME> \
+      --partitions 14 \ # default: 3
+      --replications 1 # default: 3
+
+# postgresql mode
+kubectl run smd-producer-backfill-postgresql \
+  --restart='Never' \
+  --image-pull-policy='Always' \
+  --image dwnusa/smd-producer-backfill:v0.1.2-amd64 \
+  --  --dest postgresql \
+      --pg-pass <REQUIRED> \
+      --pg-table <TABLE_NAME>
 ```
 **Consumer**
 ```bash
@@ -132,12 +163,37 @@ kubectl run smd-consumer \
 ```bash
 kubectl exec -it kafka-controller-0 -n kafka \
   -- kafka-topics.sh --create \
-  --topic server-machine-usage \
   --bootstrap-server kafka.kafka.svc.cluster.local:9092 \
+  --topic server-machine-usage \
+  --config retention.hours=24 \
   --replication-factor 3 \
   --partitions 1
+# hours 또는 ms 가능: ex. --config retention.ms=2592000000 \
 
 kafka-topics.sh --list --bootstrap-server kafka.kafka.svc.cluster.local:9092
+```
+Configuration in python
+```python
+topic = NewTopic(
+    name="server-machine-usage",
+    num_partitions=3,
+    replication_factor=3,
+    topic_configs={
+        # "retention.hours": "24"  # 1일
+        "retention.ms": "86400000", # 1일 = 24시간 * 60분 * 60초 * 1000 밀리초
+        "cleanup.policy": "delete"
+    }  # 30일
+)
+```
+### 3.2 Change Topic Setup (Retentions time)
+```bash
+kubectl exec -it kafka-controller-0 -n kafka \
+  -- kafka-configs.sh \
+  --bootstrap-server kafka.kafka.svc.cluster.local:9092 \
+  --entity-type topics \
+  --entity-name datalake-stream \
+  --alter --add-config retention.ms=300000 
+  # 5분 * 60초 * 1000
 ```
 
 
@@ -286,3 +342,4 @@ feature_importance = pd.Series(importance, index=new_column_names).sort_values(a
 print(feature_importance.head(10))
 ```
 - [ ] VAE (OmniAD 알고리즘 테스트, nvidia and pytorch container)
+- [ ] consumer 에서 테이블 생성할때 auto pid increment 하지 말고 (mahcine_id, timestamp, usage) 로 설정해서 upsert
