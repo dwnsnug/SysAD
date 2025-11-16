@@ -66,16 +66,20 @@ def setup_logger():
 # try catch 자세하게 적용
 
 # -------------------- 토픽 생성 -------------------- #
-def create_topic(dest_servers, topic_name, num_partitions=3, replication_factor=3):
+def create_topic(bootstrap_servers, topic_name, num_partitions=3, replication_factor=3):
     admin_client = KafkaAdminClient(
-        bootstrap_servers=dest_servers,
+        bootstrap_servers=bootstrap_servers,
         client_id='topic_creator'
     )
 
     topic = NewTopic(
         name=topic_name,
         num_partitions=num_partitions,
-        replication_factor=replication_factor
+        replication_factor=replication_factor,
+        topic_configs={
+            "retention.ms": "300000", # 분
+            "cleanup.policy": "delete"
+        }
     )
 
     try:
@@ -112,15 +116,34 @@ def iter_all_csv_rows(base_dir):
         with open(csv_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
-                numeric_row = {k: try_parse_number(v) for k, v in row.items()}
+                numeric_row = {k: try_parse_number(k, v) for k, v in row.items()}
+                numeric_row["label"] = 0.0
+                numeric_row["usage"] = f"train"
                 numeric_row["send_timestamp"] = datetime.now().isoformat()
                 numeric_row["machine"] = machine
                 numeric_row["usage"] = f"train"
                 yield numeric_row, machine  # machine 이름도 반환
 
+def to_str(x):
+    if isinstance(x, bytes):
+        return x.decode("utf-8", errors="ignore")
+    return str(x)
 
-def try_parse_number(value):
-    """문자열을 float/int로 변환, 실패 시 그대로 반환"""
+def try_parse_number(key, value):
+    """
+    특정 컬럼(col_0~col_37, label)만 숫자로 파싱하고
+    timestamp 같은 컬럼은 그대로 string 유지.
+    """
+    if key in ('timestamp', 'usage', 'machine'):
+        return to_str(value) # 반드시 문자열 유지
+    
+    if key in ('label'):
+        return int(value) # 반드시 문자열 유지
+
+    if key in {f"col_{i}" for i in range(38)}:
+        return float(value)  # 숫자 변환 필요 없는 컬럼
+
+    # 이제 숫자로 변환 대상인 경우만 아래 진행
     try:
         if "." in value or "e" in value or "E" in value:
             return float(value)
@@ -142,12 +165,12 @@ def on_send_error(excp):
 def main_kafka(args):
     global logger
 
-    dest_servers = args.dest_servers.split(",")
+    bootstrap_servers = args.bootstrap_servers.split(",")
     topic_name = args.topic
 
     # ✅ 토픽 자동 생성
     create_topic(
-        dest_servers, 
+        bootstrap_servers, 
         topic_name, 
         num_partitions=args.partitions, 
         replication_factor=args.replications
@@ -155,7 +178,7 @@ def main_kafka(args):
 
     # ✅ Kafka Producer 설정 (지연 최소화, 병렬 최적화)
     producer = KafkaProducer(
-        bootstrap_servers=dest_servers,
+        bootstrap_servers=bootstrap_servers,
         value_serializer=json_serializer,
         key_serializer=str.encode,
         acks='all',                   # 완전 보장
@@ -164,7 +187,7 @@ def main_kafka(args):
         batch_size=16384,
         # request_timeout_ms=20000
         # client_id="backfill-producer",
-        # bootstrap_servers=dest_servers,
+        # bootstrap_servers=bootstrap_servers,
         # key_serializer=str.encode,
         # value_serializer=json_serializer,
         # acks='1',  # 속도 ↑ (acks=all 보다 빠름)
@@ -228,14 +251,14 @@ def main_postgres(args):
     )
     cur = conn.cursor()
 
-    # ✅ 테이블 생성 (없으면 자동 생성)
+    # ✅ 테이블 생성 (없으면 자동 생성), PK 자동증가 ID는 삭제함: id SERIAL PRIMARY KEY,
     create_sql = f"""
     CREATE TABLE IF NOT EXISTS {PG_TABLE} (
-        id SERIAL PRIMARY KEY,
         send_timestamp TIMESTAMPTZ,
         machine TEXT,
         timestamp TEXT,
         usage TEXT,
+        PRIMARY KEY (machine, timestamp, usage),
         label INT,
         {','.join([f'col_{i} FLOAT' for i in range(38)])}
     );
@@ -287,7 +310,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Kafka 또는 PostgreSQL - 모든 machine CSV 전송')
     parser.add_argument('--dest', choices=['postgresql', 'kafka'], default='kafka', type=str, help='메시지를 보낼 곳 (postgresql, kafka)')
     parser.add_argument('--topic', default='backfill-train-topic', type=str, help='메시지를 보낼 토픽')
-    parser.add_argument('--dest-servers', default='kafka.kafka.svc.cluster.local:9092',
+    parser.add_argument('--bootstrap-servers', default='kafka.kafka.svc.cluster.local:9092',
                         type=str, help='Kafka 또는 Postgres 서버')
     parser.add_argument('--partitions', default=14, type=int, help='토픽 파티션 수 (기본: 14)')
     parser.add_argument('--replications', default=1, type=int, help='토픽 복제본 수 (기본: 1)')
