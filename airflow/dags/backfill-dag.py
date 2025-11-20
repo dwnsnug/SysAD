@@ -13,6 +13,7 @@ default_args = {
 with DAG(
     dag_id='backfill_pipeline',
     default_args=default_args,
+    # retry 또는 Alarm 고려
     schedule=None,
     catchup=False,
 ) as dag:
